@@ -10,10 +10,10 @@ if importlib.util.find_spec('deepspeed'):
     from deepspeed.ops.adam import DeepSpeedCPUAdam, FusedAdam
 from torch.utils.cpp_extension import load
 import types
-from RWKV.v6.state import BlockStateList
 from typing import Union, Optional, List, Tuple
-from config import global_config
-HEAD_SIZE = global_config.train_service_config.model.head_size
+from .states import LayerState, BlockStates
+
+HEAD_SIZE = 64
 
 # 配置日志记录器
 logger = logging.getLogger(__name__)
@@ -27,45 +27,146 @@ def __nop(ob):
 
 MyModule = nn.Module
 MyFunction = __nop
-# if os.environ["RWKV_JIT_ON"] == "1":
-#     MyModule = torch.jit.ScriptModule
-#     MyFunction = torch.jit.script_method
 
 CHUNK_LEN = 24
 
-full_parent_dir= os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# 修改路径设置，指向正确的CUDA文件位置
+workspace_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+cuda_dir = os.path.join(workspace_dir, "cuda")
 
-flags = ['-res-usage', f'-D_C_={HEAD_SIZE}', f"-D_CHUNK_LEN_={CHUNK_LEN}", "--use_fast_math", "-O3", "-Xptxas -O3", "--extra-device-vectorization"]
-load(name="wind_backstepping", sources=[f'{full_parent_dir}/v7/cuda/wkv7_cuda.cu', f'{full_parent_dir}/v7/cuda/wkv7_op.cpp'], is_python_module=False, verbose=True, extra_cuda_cflags=flags)
+flags = ['-res-usage', f'-D_C_={HEAD_SIZE}', 
+         f"-D_CHUNK_LEN_={CHUNK_LEN}", 
+         "--use_fast_math", "-O3", 
+         "-Xptxas -O3", "--extra-device-vectorization"]
+
+load(name="wind_backstepping", 
+     sources=[f'{cuda_dir}/wkv7_cuda.cu', f'{cuda_dir}/wkv7_op.cpp'], 
+     is_python_module=False, verbose=True, extra_cuda_cflags=flags)
 
 class WindBackstepping(torch.autograd.Function):
-    """RWKV v7 的核心计算函数，使用CUDA实现高效的前向和反向传播"""
+    """RWKV v7 的核心计算函数，支持状态持久化"""
     @staticmethod
-    def forward(ctx, w,q,k,v,z,b):
-        B,T,H,C = w.shape 
-        assert T%CHUNK_LEN == 0
-        assert all(i.dtype==torch.bfloat16 for i in [w,q,k,v,z,b])
-        assert all(i.is_contiguous() for i in [w,q,k,v,z,b])
+    def forward(ctx, w, q, k, v, z, b, prev_s=None, prev_sa=None):
+        # B: batch size, T: sequence length, H: number of heads, C: head dimension (channels)
+        B, T, H, C = w.shape 
+        assert T % CHUNK_LEN == 0
+        assert all(i.dtype==torch.bfloat16 for i in [w, q, k, v, z, b])
+        assert all(i.is_contiguous() for i in [w, q, k, v, z, b])
         y = torch.empty_like(v)
-        s = torch.empty(B,H,T//CHUNK_LEN,C,C, dtype=torch.float32,device=w.device)
-        sa = torch.empty(B,T,H,C, dtype=torch.float32,device=w.device)
-        torch.ops.wind_backstepping.forward(w,q,k,v,z,b, y,s,sa)
-        ctx.save_for_backward(w,q,k,v,z,b,s,sa)
-        return y
+        
+        # 如果提供了前一个状态，则使用它，否则创建新的空状态
+        if prev_s is not None and prev_s.shape == (B, H, T//CHUNK_LEN, C, C):
+            s = prev_s.clone()
+        else:
+            s = torch.zeros(B, H, T//CHUNK_LEN, C, C, dtype=torch.float32, device=w.device)
+            if prev_s is not None:
+                logger.warning(f"Invalid prev_s shape: expected {(B, H, T//CHUNK_LEN, C, C)}, got {prev_s.shape}. Creating new state.")
+            
+        # 处理上一个sa状态
+        if prev_sa is not None:
+            assert prev_sa.shape == (B, T, H, C), f"Expected shape: {(B, T, H, C)}, got: {prev_sa.shape}"
+            sa = prev_sa.clone()
+        else:
+            sa = torch.zeros(B, T, H, C, dtype=torch.float32, device=w.device)
+        
+        # 调用CUDA操作
+        torch.ops.wind_backstepping.forward(w, q, k, v, z, b, y, s, sa)
+        ctx.save_for_backward(w, q, k, v, z, b, s, sa)
+        
+        # 返回输出和最新状态
+        return y, s, sa
+        
     @staticmethod
-    def backward(ctx, dy):
+    def backward(ctx, dy, ds=None, dsa=None):
         assert all(i.dtype==torch.bfloat16 for i in [dy])
         assert all(i.is_contiguous() for i in [dy])
-        w,q,k,v,z,b,s,sa = ctx.saved_tensors
-        dw,dq,dk,dv,dz,db = [torch.empty_like(x) for x in [w,q,k,v,z,b]]
-        torch.ops.wind_backstepping.backward(w,q,k,v,z,b, dy,s,sa, dw,dq,dk,dv,dz,db)
-        return dw,dq,dk,dv,dz,db
+        w, q, k, v, z, b, s, sa = ctx.saved_tensors
+        dw, dq, dk, dv, dz, db = [torch.empty_like(x) for x in [w, q, k, v, z, b]]
+        torch.ops.wind_backstepping.backward(w, q, k, v, z, b, dy, s, sa, dw, dq, dk, dv, dz, db)
+        return dw, dq, dk, dv, dz, db, None, None
 
-def RUN_CUDA_RWKV7g(q,w,k,v,a,b):
-    """RWKV v7 的CUDA核心计算函数包装器"""
-    B,T,HC = q.shape
-    q,w,k,v,a,b = [i.view(B,T,HC//64,64) for i in [q,w,k,v,a,b]]
-    return WindBackstepping.apply(w,q,k,v,a,b).view(B,T,HC)
+def RUN_CUDA_RWKV7g(q, w, k, v, a, b, prev_s=None, prev_sa=None):
+    """支持状态持久化的RWKV v7 CUDA核心计算函数包装器"""
+    B, T, HC = q.shape
+    q, w, k, v, a, b = [i.view(B, T, HC//64, 64) for i in [q, w, k, v, a, b]]
+    
+    # 处理前一个状态
+    if prev_s is not None:
+        prev_s = prev_s.to(device=q.device, dtype=torch.float32)
+    if prev_sa is not None:
+        prev_sa = prev_sa.to(device=q.device, dtype=torch.float32)
+        
+    y, s, sa = WindBackstepping.apply(w, q, k, v, a, b, prev_s, prev_sa)
+    return y.view(B, T, HC), s, sa
+
+
+CHUNK_LEN_ONE = 2
+
+flags = ['-res-usage', f'-D_C_={HEAD_SIZE}', 
+         f"-D_CHUNK_LEN_={CHUNK_LEN_ONE}", 
+         "--use_fast_math", "-O3", 
+         "-Xptxas -O3", "--extra-device-vectorization"]
+
+load(name="wind_backstepping_one", 
+     sources=[f'{cuda_dir}/wkv7_cuda_one.cu', f'{cuda_dir}/wkv7_op_one.cpp'], 
+     is_python_module=False, verbose=True, extra_cuda_cflags=flags)
+
+class WindBacksteppinOne(torch.autograd.Function):
+    """RWKV v7 的核心计算函数，支持状态持久化"""
+    @staticmethod
+    def forward(ctx, w, q, k, v, z, b, prev_s=None, prev_sa=None):
+        # B: batch size, T: sequence length, H: number of heads, C: head dimension (channels)
+        B, T, H, C = w.shape 
+        assert T % CHUNK_LEN_ONE == 0
+        assert all(i.dtype==torch.bfloat16 for i in [w, q, k, v, z, b])
+        assert all(i.is_contiguous() for i in [w, q, k, v, z, b])
+        y = torch.empty_like(v)
+        
+        # 如果提供了前一个状态，则使用它，否则创建新的空状态
+        # todo 暂时先这么处理，需要要考虑合并形状不一致的state的办法
+        if prev_s is not None and prev_s.shape == (B, H, T//CHUNK_LEN_ONE, C, C):
+            s = prev_s.clone()
+        else:
+            s = torch.zeros(B, H, T//CHUNK_LEN_ONE, C, C, dtype=torch.float32, device=w.device)
+            if prev_s is not None:
+                logger.warning(f"Invalid prev_s shape: expected {(B, H, T//CHUNK_LEN_ONE, C, C)}, got {prev_s.shape}. Creating new state.")
+            
+        # 处理上一个sa状态
+        if prev_sa is not None:
+            assert prev_sa.shape == (B, T, H, C), f"Expected shape: {(B, T, H, C)}, got: {prev_sa.shape}"
+            sa = prev_sa.clone()
+        else:
+            sa = torch.zeros(B, T, H, C, dtype=torch.float32, device=w.device)
+        
+        # 调用CUDA操作
+        torch.ops.wind_backstepping.forward(w, q, k, v, z, b, y, s, sa)
+        ctx.save_for_backward(w, q, k, v, z, b, s, sa)
+        
+        # 返回输出和最新状态
+        return y, s, sa
+        
+    @staticmethod
+    def backward(ctx, dy, ds=None, dsa=None):
+        assert all(i.dtype==torch.bfloat16 for i in [dy])
+        assert all(i.is_contiguous() for i in [dy])
+        w, q, k, v, z, b, s, sa = ctx.saved_tensors
+        dw, dq, dk, dv, dz, db = [torch.empty_like(x) for x in [w, q, k, v, z, b]]
+        torch.ops.wind_backstepping.backward(w, q, k, v, z, b, dy, s, sa, dw, dq, dk, dv, dz, db)
+        return dw, dq, dk, dv, dz, db, None, None
+
+def RUN_CUDA_RWKV7g_One(q, w, k, v, a, b, prev_s=None, prev_sa=None):
+    """支持状态持久化的RWKV v7 CUDA核心计算函数包装器"""
+    B, T, HC = q.shape
+    q, w, k, v, a, b = [i.view(B, T, HC//64, 64) for i in [q, w, k, v, a, b]]
+    
+    # 处理前一个状态
+    if prev_s is not None:
+        prev_s = prev_s.to(device=q.device, dtype=torch.float32)
+    if prev_sa is not None:
+        prev_sa = prev_sa.to(device=q.device, dtype=torch.float32)
+        
+    y, s, sa = WindBacksteppinOne.apply(w, q, k, v, a, b, prev_s, prev_sa)
+    return y.view(B, T, HC), s, sa
 
 
 class RWKV_Tmix_x070(MyModule):
@@ -156,8 +257,8 @@ class RWKV_Tmix_x070(MyModule):
             # self.output.weight.data.zero_()
 
     @MyFunction
-    def forward(self, x, v_first):
-        """前向传播函数"""
+    def forward(self, x, v_first, layer_state=None):
+        """前向传播函数，支持状态持久化"""
         B, T, C = x.size()
         H = self.n_head
         xx = self.time_shift(x) - x
@@ -170,26 +271,40 @@ class RWKV_Tmix_x070(MyModule):
         xg = x + xx * self.x_g
 
         r = self.receptance(xr)
-        w = -F.softplus(-(self.w0 + torch.tanh(xw @ self.w1) @ self.w2)) - 0.5 # soft-clamp to (-inf, -0.5)
+        w = -F.softplus(-(self.w0 + torch.tanh(xw @ self.w1) @ self.w2)) - 0.5
         k = self.key(xk)
         v = self.value(xv)
         if self.layer_id == 0:
-            v_first = v # store the v of the first layer
+            v_first = v
         else:
-            v = v + (v_first - v) * torch.sigmoid(self.v0 + (xv @ self.v1) @ self.v2) # add value residual
-        a = torch.sigmoid(self.a0 + (xa @ self.a1) @ self.a2) # a is "in-context learning rate"
+            v = v + (v_first - v) * torch.sigmoid(self.v0 + (xv @ self.v1) @ self.v2)
+        a = torch.sigmoid(self.a0 + (xa @ self.a1) @ self.a2)
         g = torch.sigmoid(xg @ self.g1) @ self.g2
 
         kk = k * self.k_k
         kk = F.normalize(kk.view(B,T,H,-1), dim=-1, p=2.0).view(B,T,C)
         k = k * (1 + (a-1) * self.k_a)
+        
+        # 提取前一个状态（如果有）
+        prev_s = None
+        prev_sa = None
+        if layer_state is not None:
+            prev_s, prev_sa = layer_state.get()
+        
+        # 使用状态进行计算
+        if True:
+            x, s, sa = RUN_CUDA_RWKV7g_One(r, w, k, v, -kk, kk*a, prev_s, prev_sa)
+        else:
+            x, s, sa = RUN_CUDA_RWKV7g(r, w, k, v, -kk, kk*a, prev_s, prev_sa)
 
-        x = RUN_CUDA_RWKV7g(r, w, k, v, -kk, kk*a)
         x = self.ln_x(x.view(B * T, C)).view(B, T, C)
 
         x = x + ((r.view(B,T,H,-1)*k.view(B,T,H,-1)*self.r_k).sum(dim=-1, keepdim=True) * v.view(B,T,H,-1)).view(B,T,C)
         x = self.output(x * g)
-        return x, v_first
+        
+        # 创建新的LayerState
+        new_layer_state = LayerState(s, sa)
+        return x, v_first, new_layer_state
     
 
 class RWKV_CMix_x070(MyModule):
@@ -244,20 +359,22 @@ class Block(nn.Module):
             self.drop0 = nn.Dropout(p=dropout)
             self.drop1 = nn.Dropout(p=dropout)
 
-    def forward(self, x, v_first):
-        """前向传播函数"""
+    def forward(self, x, v_first, layer_state=None):
+        """前向传播函数，支持状态持久化"""
         if self.layer_id == 0:
             x = self.ln0(x)
 
-        x_attn, v_first = self.att(self.ln1(x), v_first)
+        # 时间混合层（支持状态）
+        x_attn, v_first, att_layer_state = self.att(self.ln1(x), v_first, layer_state)
         x = x + x_attn
 
+        # 通道混合层（不需要状态）
         x = x + self.ffn(self.ln2(x))
-        return x, v_first
-
-
+        
+        # 返回当前block的LayerState
+        return x, v_first, att_layer_state
+    
 class L2Wrap(torch.autograd.Function):
-    """L2正则化包装器"""
     @staticmethod
     def forward(ctx, loss, y):
         ctx.save_for_backward(y)
@@ -272,11 +389,9 @@ class L2Wrap(torch.autograd.Function):
         gy = torch.zeros_like(y)
         gy.scatter_(-1, ids, maxx * factor)
         return (grad_output, gy)
-    
-
 
 class RWKV(nn.Module):
-    """RWKV v7 模型主类"""
+    """RWKV v7 模型主类，支持状态持久化"""
     def __init__(
         self,
         # Model architecture parameters
@@ -290,7 +405,7 @@ class RWKV(nn.Module):
         # Model loading parameters
         load_model=None,
         dtype="bf16",
-        
+
         # Training parameters
         dropout=0.0,
         grad_cp=1):
@@ -308,7 +423,7 @@ class RWKV(nn.Module):
             "bf16": torch.bfloat16
         }
         self.dtype = dtype_map.get(dtype, torch.bfloat16)
-        
+        self.rnn_model = None
         # Ensure load_model is specified
         assert load_model is not None, "load_model must be specified"
         
@@ -329,8 +444,9 @@ class RWKV(nn.Module):
             vocab_size = model_weights['head.weight'].shape[0]
 
         dim_att = n_embd
-        n_head = dim_att // head_size
-        dim_ffn = int((n_embd * 3.5) // 32 * 32)  # Not used but kept for reference
+        self.n_head = dim_att // head_size
+        self.head_size = head_size
+        self.dim_ffn = int((n_embd * 3.5) // 32 * 32)  # Not used but kept for reference
 
         self.emb = nn.Embedding(vocab_size, n_embd)
         self.blocks = nn.ModuleList([
@@ -357,11 +473,14 @@ class RWKV(nn.Module):
 
         # Convert parameters to the specified dtype
         for p in self.parameters():
-            p.data = p.data.to(dtype=self.dtype)
+            p.data = p.data.to(device=self.get_device(),dtype=self.dtype)
 
         # Clean up
         del model_weights
         self.clear_gpu_memory(force=True)
+
+        # 初始化为None，稍后会改为BlockStates对象
+        self.rnn_states = None
 
     @staticmethod
     def check_cuda_available():
@@ -430,108 +549,12 @@ class RWKV(nn.Module):
         # inplace操作
         tensor.data = tensor.data.to(dtype=dtype, device=device)
         return tensor
-
-    def forward(self, 
-                idx: Union[torch.Tensor, list], 
-                v_first: Optional[torch.Tensor] = None,
-                states: Optional[BlockStateList] = None,
-                return_states: bool = True,
-                return_v_first: bool = False) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-        """
-        Forward pass through the RWKV model.
-        保留state的是为了与state训练兼容，虽然自身不形成state
-        Args:
-            idx: Input tensor or list of token IDs
-            states: Optional previous states for continuation
-            v_first: Optional previous v_first tensor for continuation
-            return_states: Whether to return the v_first state
-            return_v_first: Whether to return the v_first state
-        Returns:
-            logits: Output logits
-            v_first: (Optional) The updated v_first state for continuation
-        """
-        B, T = idx.size() if isinstance(idx, torch.Tensor) else (len(idx), len(idx[0]))
-        C = self.n_embd
-        H = C // HEAD_SIZE
-
-        assert T <= self.ctx_len, f"Cannot forward sequence of length {T}, model ctx_len is {self.ctx_len}."
-        
-        # 检查当前内存使用情况
-        if torch.cuda.is_available():
-            allocated, _, total = self.get_gpu_memory_usage()
-            if allocated / total > MEM_MONITOR_THRESHOLD * 0.9:  # 接近阈值时提前清理
-                logger.info(f"前向传播前清理GPU内存，当前使用率: {allocated/total:.2f}")
-                self.clear_gpu_memory()
-        
-        # Convert idx to tensor if it's a list
-        if not isinstance(idx, torch.Tensor):
-            x = torch.tensor(idx, device=self.get_device(), dtype=torch.long)
-        else:
-            x = idx.to(self.get_device())
-            
-        x = self.emb(x)
-        
-        # 优化输入张量的数据类型
-        x = self.optimize_tensor(x)
-
-        if self.dropout > 0:
-            x = self.drop0(x)
-
-        # Initialize v_first if needed
-        if v_first is None:
-            v_first = torch.zeros_like(x, device=x.device)
-        else:
-            # 确保v_first在正确的设备和数据类型上
-            v_first = self.optimize_tensor(v_first)
-
-        # Process through blocks
-        for i, block in enumerate(self.blocks):
-            if self.grad_cp == 1 and self.training:
-                x, v_first = deepspeed.checkpointing.checkpoint(block, x, v_first)
-            else:
-                x, v_first = block(x, v_first)
-                
-            # 对于非常深的模型，在处理中间层时可能需要清理内存
-            if (i + 1) % 8 == 0 and torch.cuda.is_available() and self.n_layer > 16:
-                allocated, _, total = self.get_gpu_memory_usage()
-                if allocated / total > MEM_MONITOR_THRESHOLD * 0.8:
-                    logger.debug(f"处理第{i+1}层后清理GPU内存")
-                    self.clear_gpu_memory()
-
-        x = self.ln_out(x)
-        logits = self.head(x)
-
-        if self.training:
-            v_first_cpu = v_first.detach().cpu()
-            # 清理不再需要的GPU内存
-            del v_first
-            if torch.cuda.is_available():
-                self.clear_gpu_memory()
-
-        if return_v_first and return_states:
-            return logits, v_first, states
-        elif return_states:
-            return logits, states
-        elif return_v_first:
-            return logits, v_first
-        else:
-            return logits
     
-    def get_device(self):
-        """Helper to get the device of the model"""
-        return next(self.parameters()).device
-        
-# Simplify RWKVOptimizer to be a utility class with better integration
-class RWKVOptimizer:
-    """RWKV模型优化器工具类"""
-    
-    @staticmethod
-    def get_optim_groups(model, layerwise_lr=0.0, weight_decay=0.01, my_pile_stage=0):
+    def get_optim_groups(self, layerwise_lr=0.0, weight_decay=0.01, my_pile_stage=0):
         """
         将模型参数分组以应用不同的学习率和权重衰减
         
         参数:
-            model: RWKV模型实例
             layerwise_lr: 是否使用分层学习率（0表示禁用）
             weight_decay: 权重衰减系数
             my_pile_stage: Pile数据集的训练阶段
@@ -546,7 +569,7 @@ class RWKVOptimizer:
         lr_3x = set()     # 3倍学习率参数
         
         # 根据参数名称进行分类
-        for n, p in model.named_parameters():
+        for n, p in self.named_parameters():
             # 权重矩阵参数
             if (("_w1" in n) or ("_w2" in n)) and (layerwise_lr > 0):
                 lr_1x.add(n)
@@ -581,7 +604,7 @@ class RWKVOptimizer:
                 lr_1x.add(n)
 
         # 创建参数字典
-        param_dict = {n: p for n, p in model.named_parameters()}
+        param_dict = {n: p for n, p in self.named_parameters()}
         
         # 构建优化器分组
         optim_groups = []
@@ -610,8 +633,8 @@ class RWKVOptimizer:
             
         return optim_groups
     
-    @classmethod
-    def create_optimizer(cls, model, lr_init=5e-4, lr_final=1e-5, beta1=0.9, beta2=0.99, 
+    
+    def create_optimizer(self, lr_init=5e-4, lr_final=1e-5, beta1=0.9, beta2=0.99, 
                            adam_eps=1e-8, weight_decay=0.01, layerwise_lr=0.0, 
                            my_pile_stage=0, adamw_mode=True, warmup_steps=1000):
         """
@@ -634,14 +657,14 @@ class RWKVOptimizer:
             lr_scheduler: 配置好的学习率调度器
         """
         # 在创建优化器前清理内存
-        if hasattr(model, 'clear_gpu_memory'):
-            model.clear_gpu_memory(force=True)
+        if hasattr(self, 'clear_gpu_memory'):
+            self.clear_gpu_memory(force=True)
         else:
             gc.collect()
             torch.cuda.empty_cache()
             
         # 获取参数分组
-        optim_groups = cls.get_optim_groups(model, layerwise_lr, weight_decay, my_pile_stage)
+        optim_groups = self.get_optim_groups(layerwise_lr, weight_decay, my_pile_stage)
         
         # 创建DeepSpeed CPU Adam优化器
         optimizer = DeepSpeedCPUAdam(
@@ -665,63 +688,203 @@ class RWKVOptimizer:
         )
         
         # 创建优化器后再次清理内存
-        if hasattr(model, 'clear_gpu_memory'):
-            model.clear_gpu_memory()
+        if hasattr(self, 'clear_gpu_memory'):
+            self.clear_gpu_memory()
         else:
             gc.collect()
             torch.cuda.empty_cache()
             
         return optimizer, lr_scheduler
 
-    @staticmethod
-    def create_rwkv_model(load_model, n_embd=-1, n_layer=-1, vocab_size=-1, **kwargs):
-        """
-        创建并初始化RWKV模型实例
-        """
-        # 在创建模型前检查CUDA可用性
-        if RWKV.check_cuda_available():
-            logger.info("CUDA可用，将使用GPU创建模型")
-            
-            # 检查GPU内存状态
-            allocated, reserved, total = RWKV.get_gpu_memory_usage()
-            logger.info(f"当前GPU内存使用: {allocated:.2f}GB / {total:.2f}GB (使用率: {allocated/total:.2f})")
-            
-            # 如果内存使用率过高，尝试清理
-            if allocated / total > MEM_MONITOR_THRESHOLD * 0.7:
-                logger.info("GPU内存使用率较高，尝试清理...")
-                gc.collect()
-                torch.cuda.empty_cache()
+
+    def reset_states(self):
+        """重置所有层的状态"""
+        self.rnn_states = BlockStates()
+
+    def forward(self, idx, v_first=None, use_states=True):
+        """支持状态持久化的前向传播"""
+        B, T = idx.size() if isinstance(idx, torch.Tensor) else (len(idx), len(idx[0]))
+        C = self.n_embd
+        H = C // HEAD_SIZE
+
+        assert T <= self.ctx_len, f"Cannot forward sequence of length {T}, model ctx_len is {self.ctx_len}."
+        
+        # 检查当前内存使用情况
+        if torch.cuda.is_available():
+            allocated, _, total = self.get_gpu_memory_usage()
+            if allocated / total > MEM_MONITOR_THRESHOLD * 0.9:
+                logger.info(f"前向传播前清理GPU内存，当前使用率: {allocated/total:.2f}")
+                self.clear_gpu_memory()
+        
+        # 转换输入为tensor
+        if not isinstance(idx, torch.Tensor):
+            x = torch.tensor(idx, device=self.get_device(), dtype=torch.long)
         else:
-            logger.warning("CUDA不可用，将在CPU上创建模型，性能可能受到影响")
+            x = idx.to(self.get_device())
             
-        # 创建模型实例
-        model = RWKV(
-            n_embd=n_embd,
-            n_layer=n_layer,
-            vocab_size=vocab_size,
-            load_model=load_model,
-            **kwargs
-        )
-        
-        return model
-        
-    @staticmethod
-    def optimize_model_memory(model):
-        """
-        优化模型内存使用
-        """
-        # 确保模型在评估模式下
-        model.eval()
-        
-        # 清理不必要的梯度
-        for param in model.parameters():
-            param.requires_grad_(False)
-        
-        # 清理GPU内存
-        if hasattr(model, 'clear_gpu_memory'):
-            model.clear_gpu_memory(force=True)
+        x = self.emb(x)
+        x = self.optimize_tensor(x)
+
+        if self.dropout > 0:
+            x = self.drop0(x)
+
+        # 初始化v_first
+        if v_first is None:
+            v_first = torch.zeros_like(x, device=x.device)
         else:
-            gc.collect()
-            torch.cuda.empty_cache()
+            v_first = self.optimize_tensor(v_first)
+
+        # 确保有BlockStates对象
+        if use_states and self.rnn_states is None:
+            self.rnn_states = BlockStates()
+        
+        # 初始化新状态
+        new_states = BlockStates()
+        
+        # 通过blocks处理
+        for i, block in enumerate(self.blocks):
+            # 获取当前层的前一个状态
+            layer_state = None
+            if use_states and self.rnn_states is not None:
+                layer_state = self.rnn_states[i]
+                
+            # 处理当前块
+            if self.grad_cp == 1 and not use_states:  # 状态持久化模式不使用checkpointing
+                x, v_first = deepspeed.checkpointing.checkpoint(block, x, v_first)
+            else:
+                x, v_first, state = block(x, v_first, layer_state)
+                new_states[i] = state
+                
+            # 内存管理
+            if (i + 1) % 8 == 0 and torch.cuda.is_available() and self.n_layer > 16:
+                allocated, _, total = self.get_gpu_memory_usage()
+                if allocated / total > MEM_MONITOR_THRESHOLD * 0.8:
+                    logger.debug(f"处理第{i+1}层后清理GPU内存")
+                    self.clear_gpu_memory()
+
+        x = self.ln_out(x)
+        logits = self.head(x)
+
+        # 更新模型状态（仅当启用状态持久化时）
+        if use_states:
+            # 将状态移到CPU并分离计算图
+            self.rnn_states = new_states.detach().cpu()
+
+        return logits, v_first
+
+
+    def get_device(self):
+        """Helper to get the device of the model"""
+        return next(self.parameters()).device
+        
+    def get_states(self):
+        """获取当前模型状态
+        
+        Returns:
+            BlockStates: 模型各层的状态，可用于保存或分析
+        """
+        return self.rnn_states
+    
+    def set_states(self, states):
+        """设置模型状态
+        
+        Args:
+            states (BlockStates): 要设置的模型状态
             
-        return model
+        Returns:
+            self: 返回模型自身，支持链式调用
+        """
+        if isinstance(states, BlockStates):
+            self.rnn_states = states
+        else:
+            # 兼容旧格式的状态
+            self.rnn_states = BlockStates()
+            if isinstance(states, list):
+                for i, state_tuple in enumerate(states):
+                    if state_tuple is not None:
+                        self.rnn_states[i] = state_tuple
+        return self
+        
+
+if __name__ == "__main__":
+    
+    model = RWKV(load_model="/home/neromous/MachineLr/datadisk/rwkv-checkpoints/basemodel/rwkv-x070-2b9-world-v3-53%trained-20250121-ctx4k.pth")
+    
+    optimizer, lr_scheduler = model.create_optimizer()
+
+    ds_config = {
+        "bfloat16": {
+            "enabled": "auto"
+        },
+        "zero_optimization": {
+            "stage": 2,
+            "offload_optimizer": {
+                "device": "cpu",
+                "pin_memory": True
+            },
+            "overlap_comm": True,
+            "allgather_partitions": True,
+            "allgather_bucket_size": 2e8,
+            "reduce_scatter": True,
+            "reduce_bucket_size": 2e8,
+            "contiguous_gradients": True
+        },
+        "gradient_accumulation_steps": 1,
+        "gradient_clipping": 1.0,
+        "train_micro_batch_size_per_gpu": 4
+    }
+
+    # 获取模型所在设备
+    device = model.get_device()
+    print(f"模型设备: {device}")
+    
+    # 确保输入张量在同一设备上
+    input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24]], 
+                            device=device)
+    target_ids = torch.tensor([[2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]], 
+                            device="cuda")
+    
+    model_engine, optimizer, _, _ = deepspeed.initialize(
+        #args=args, 
+        model=model,
+        optimizer=optimizer,
+        lr_scheduler=lr_scheduler,
+        config=ds_config
+    )
+    # 执行前向传播
+    logits, v_first = model_engine(input_ids)
+    print(f"输出形状: {logits.shape}")
+
+    loss = F.cross_entropy(logits.view(-1, logits.size(-1)), target_ids.reshape(-1))
+    print(f"损失: {loss}")
+
+    loss = L2Wrap.apply(loss, logits)
+    print(f"损失: {loss}")
+
+    model_engine.backward(loss)
+    model_engine.step()
+
+
+
+        # 执行前向传播
+    logits, v_first = model_engine(input_ids, use_states=True)
+    print(f"输出形状: {logits.shape}")
+
+    loss = F.cross_entropy(logits.view(-1, logits.size(-1)), target_ids.reshape(-1))
+    print(f"损失: {loss}")
+
+    loss = L2Wrap.apply(loss, logits)
+    print(f"损失: {loss}")
+
+    model_engine.backward(loss)
+    model_engine.step()
+
+
+    
+    # 检查logits中是否存在nan值
+    if torch.isnan(logits).any():
+        print("警告: logits中存在NaN值")
+        # 获取nan的具体位置
+        nan_indices = torch.where(torch.isnan(logits))
+        print(f"NaN值位置: {nan_indices}")
+    

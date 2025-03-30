@@ -34,7 +34,7 @@
             "n_embd": -1,
             "n_layer": -1,
             "vocab_size": -1,
-            "ctx_len": 1024,
+            "ctx_len": 256,
             "dtype": "bf16",
             "head_size": 64,
             "head_size_a": 64,

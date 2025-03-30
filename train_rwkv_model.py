@@ -41,12 +41,13 @@ class RWKVDataset(Dataset):
         self.size = size
         # 确保序列长度是CHUNK_LEN的倍数
         self.seq_length = (seq_length // CHUNK_LEN) * CHUNK_LEN
-        self.eval_tokens = eval_tokens
+        self.eval_tokens = tokenizer.encode(eval_text)
         
     def __len__(self):
         return self.size
         
     def __getitem__(self, idx):
+        
         # 随机选择起始位置
         if len(self.eval_tokens) >= self.seq_length + 1:
             start_idx = torch.randint(0, len(self.eval_tokens) - self.seq_length - 1, (1,)).item()
