@@ -289,7 +289,7 @@
         "save_ckpt_dir_name": "ourborous",
         "auto_save_name": "auto_save",
         "n_save_new": 10,
-        "reward_model_on": true,
+        "reward_model_on": false,
         "auto_train_reward_model": true,
         "broadcast_sync": true,
         "default_api_base": "",
