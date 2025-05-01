@@ -1,0 +1,327 @@
+{
+    "ckpt_dir": "/home/li/MachineLr/datadisk/rwkv-checkpoints",
+    "save_dataset_dir": "./dataset_collection",
+    "save_rl_dataset_dir": "./rl_dataset_collection",
+    "tokenizer_train_dir": "./vocabs/rwkv_vocab_ourborous_eval.txt",
+    "tokenizer_eval_dir": "./vocabs/rwkv_vocab_ourborous_eval.txt",
+    "cache_dir": "/home/li/MachineLr/ramdisk",
+    "voice_on": false,
+    "wandb_proj": "",
+    "rwkv_version": "v6",
+    "server_config": {
+        "train": {
+            "host": "10.3.6.98",
+            "port_begin": 3005
+        },
+        "infer": {
+            "host": "10.3.6.98",
+            "port": 4514,
+            "batching_broadcast_host": "10.3.6.98",
+            "batching_broadcast_port": 4516
+        },
+        "ourborous": {
+            "host": "10.3.6.98",
+            "listening_message_port": 9810,
+            "master_involve_port": 4515
+        },
+        "dpo": {
+            "host": "10.3.6.98",
+            "inference_service_port": 4514
+        },
+        "reward_model": {
+            "host": "10.0.5.101",
+            "port": 4514
+        },
+        "webui": {
+            "host": "10.3.6.98",
+            "port": 7860,
+            "share": false
+        }
+    },
+    "train_service_config": {
+        "model": {
+            "load_model": "/home/li/MachineLr/datadisk/rwkv-checkpoints/ruri0224/ruri0224.pth",
+            "n_embd": -1,
+            "n_layer": -1,
+            "vocab_size": -1,
+            "ctx_len": 3072,
+            "dtype": "bf16",
+            "head_size": 64,
+            "head_size_divisor": 8,
+            "chunk_len": 1
+        },
+        "deepspeed": {
+            "zero": true,
+            "ds_stage": 2,
+            "offload_optimizer": true,
+            "offload_param_stage3": false,
+            "gradient_accumulation_steps": 1
+        },
+        "vocoder": {
+            "load_model": null,
+            "load_disc_model": null,
+            "train_ctx": 256,
+            "rst_state_ctx": 3072,
+            "sample_rate": 24000,
+            "mel_loss_coeff": 45,
+            "mrd_loss_coeff": 1,
+            "GAN_on": true,
+            "load_feature_extractor_dir": "/home/li/MachineLr/datadisk/rwkv-checkpoints/basemodel/encodec_encoder.pt",
+            "adapter": {
+                "chunk_len": 15,
+                "n_embd": 2560,
+                "n_layers": 5
+            },
+            "vocos_backbone": {
+                "input_channels": 128,
+                "dim": 512,
+                "intermediate_dim": 1536,
+                "num_layers": 8
+            },
+            "head": {
+                "dim": 512,
+                "n_fft": 1280,
+                "hop_length": 320,
+                "padding": "same"
+            },
+            "training": {
+                "backbone_lr": 5e-4,
+                "disc_lr": 5e-4,
+                "transformer_lr": 4e-5
+            }
+        },
+        "lora": {
+            "lora_on": false,
+            "r": -1,
+            "alpha": 128,
+            "parts": [
+                "att",
+                "ffn",
+                "ln"
+            ],
+            "train_state": false,
+            "path": "/home/neromous/Documents/RWKV-Ourboros/resources/output/lora/default.pth"
+        },
+        "train": {
+            "grad_cp": 1,
+            "dropout": 0,
+            "min_loss": 0.45,
+            "max_loss": 10,
+            "min_loss_fix": 0.05,
+            "max_loss_fix": 1,
+            "multi_scale_alpha": 0.9,
+            "head_size": 64,
+            "weight_decay": 0.01,
+            "dim_att": 0,
+            "dim_ffn": 0,
+            "layerwise_lr": 1,
+            "lr_init": 4e-5,
+            "warmup_steps": 0,
+            "lr_final": 4e-5,
+            "beta1": 0.9,
+            "beta2": 0.99,
+            "adam_eps": 1.0e-8,
+            "optimzer_style": "adam",
+            "adamw_mode": true,
+            "my_pile_stage": 1
+        }
+    },
+    "infer_service_config": {
+        "batching_batch_size": 1,
+        "model": {
+            "load_model": "/home/li/MachineLr/datadisk/rwkv-checkpoints/weights/online_learning.pth",
+            "n_embd": -1,
+            "n_layer": -1,
+            "vocab_size": -1,
+            "ctx_len": 3072,
+            "dtype": "bf16",
+            "head_size": 64,
+            "head_size_divisor": 8,
+            "chunk_len": 24,
+            "device": "cuda:1"
+        },
+        "vocoder": {
+            "load_model": null,
+            "train_ctx": 256,
+            "rst_state_ctx": 3072,
+            "sample_rate": 24000,
+            "mel_loss_coeff": 45,
+            "mrd_loss_coeff": 1,
+            "GAN_on": true,
+            "load_feature_extractor_dir": "/home/li/MachineLr/datadisk/rwkv-checkpoints/basemodel/encodec_encoder.pt",
+            "adapter": {
+                "chunk_len": 15,
+                "n_embd": 2560,
+                "n_layers": 5
+            },
+            "vocos_backbone": {
+                "input_channels": 128,
+                "dim": 512,
+                "intermediate_dim": 1536,
+                "num_layers": 8
+            },
+            "head": {
+                "dim": 512,
+                "n_fft": 1280,
+                "hop_length": 320,
+                "padding": "same"
+            },
+            "training": {
+                "backbone_lr": 5e-4,
+                "disc_lr": 5e-4,
+                "transformer_lr": 4e-5
+            }
+        },
+        "inference_default": {
+            "max_tokens": 1000,
+            "temperature": 1,
+            "top_p": 0.7,
+            "top_k": 0,
+            "alpha_frequency": 0.2,
+            "alpha_presence": 0.2,
+            "alpha_decay": 1,
+            "token_ban": [
+                0
+            ],
+            "token_stop": [
+                65535
+            ],
+            "chunk_len": 512
+        }
+    },
+    "pretrain_script_config": {
+        "batch_size": 2,
+        "num_workers_per_gpu": 4,
+        "epoches": 1,
+        "save_weight_epochs": 1,
+        "save_weight_steps": 128,
+        "dataset_folder": "/home/li/MachineLr/datadisk/ssg-dataset-protocol-datas/ruri_add_pretrain",
+        "model": {
+            "load_model": "/home/li/MachineLr/datadisk/rwkv-checkpoints/ruri0207/ruri3b0207.pth",
+            "n_embd": -1,
+            "n_layer": -1,
+            "vocab_size": 65536,
+            "ctx_len": 4096,
+            "dtype": "bf16",
+            "head_size": 64,
+            "head_size_divisor": 8,
+            "chunk_len": 24
+        },
+        "deepspeed": {
+            "zero": true,
+            "ds_stage": 2,
+            "offload_optimizer": true,
+            "offload_param_stage3": false,
+            "gradient_accumulation_steps": 1
+        },
+        "train": {
+            "grad_cp": 1,
+            "dropout": 0,
+            "min_loss": 0.45,
+            "max_loss": 10,
+            "min_loss_fix": 0.05,
+            "max_loss_fix": 1,
+            "multi_scale_alpha": 0.9,
+            "ctx_parts": "0",
+            "head_size": 64,
+            "weight_decay": 0.01,
+            "dim_att": 0,
+            "dim_ffn": 0,
+            "layerwise_lr": 1,
+            "lr_init": 6e-5,
+            "warmup_steps": 50000,
+            "lr_final": 6e-5,
+            "beta1": 0.9,
+            "beta2": 0.99,
+            "adam_eps": 1.0e-8,
+            "optimzer_style": "adam",
+            "adamw_mode": true,
+            "my_pile_stage": 1
+        },
+        "lora": {
+            "lora_on": false,
+            "r": -1,
+            "alpha": 128,
+            "parts": [
+                "att",
+                "ffn",
+                "ln"
+            ],
+            "train_state": false,
+            "path": "/home/neromous/Documents/RWKV-Ourboros/resources/output/lora/default.pth"
+        },
+        "vocoder": {
+            "load_model": null,
+            "load_disc_model": null,
+            "train_ctx": 256,
+            "rst_state_ctx": 3072,
+            "sample_rate": 24000,
+            "mel_loss_coeff": 45,
+            "mrd_loss_coeff": 1,
+            "GAN_on": true,
+            "load_feature_extractor_dir": "/home/li/MachineLr/datadisk/rwkv-checkpoints/basemodel/encodec_encoder.pt",
+            "adapter": {
+                "chunk_len": 15,
+                "n_embd": 2560,
+                "n_layers": 5
+            },
+            "vocos_backbone": {
+                "input_channels": 128,
+                "dim": 512,
+                "intermediate_dim": 1536,
+                "num_layers": 8
+            },
+            "head": {
+                "dim": 512,
+                "n_fft": 1280,
+                "hop_length": 320,
+                "padding": "same"
+            },
+            "training": {
+                "backbone_lr": 5e-4,
+                "disc_lr": 5e-4,
+                "transformer_lr": 4e-5
+            }
+        }
+    },
+    "ourborous_config": {
+        "save_log_dir": "./dataset_collection/ourborous",
+        "save_ckpt_dir_name": "ourborous",
+        "auto_save_name": "auto_save",
+        "n_save_new": 10,
+        "reward_model_on": true,
+        "auto_train_reward_model": true,
+        "broadcast_sync": true,
+        "default_api_base": "",
+        "default_api_key": "",
+        "default_api_model": "",
+        "api_agents": []
+    },
+    "webui": {
+        "benchmark": {
+            "mmlu_dir": "/home/li/MachineLr/datadisk/benchmark/mmlu-like",
+            "out_res_dir": "./benchmark_out",
+            "human_eval_dir": "/home/li/MachineLr/datadisk/benchmark/HumanEval.jsonl.gz",
+            "questions_dir": "./benchmark/questions"
+        },
+        "api_hist_dir": "./api_hists"
+    },
+    "grpo": {
+        "n_rollout": 32,
+        "rollout_tiny_batch": 1,
+        "train_batch_size": 1,
+        "n_train_each_episode": 1,
+        "rollout_max_len": 1024,
+        "group_size": 12,
+        "lr_init": 5e-6,
+        "warmup_steps": 1,
+        "lr_final": 5e-6,
+        "kl_weight": 0.01,
+        "clip_eps": 0.2,
+        "grad_cp_max_norm": 1.0,
+        "n_replay_sliding_window": 0,
+        "clear_replay_on_episode": true,
+        "accumulate_grad": true,
+        "reward_model": {}
+    }
+}
