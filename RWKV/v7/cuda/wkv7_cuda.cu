@@ -13,7 +13,14 @@ __global__ void forward_kernel(int T, int H, F_ w_, F_ q_, F_ k_, F_ v_, F_ a_, 
 
     float state[C] = {0};
     __shared__ float q[C], k[C], w[C], a[C], b[C];
-
+    // 新增代码，修改T=0时刻的state初始化，这里似乎不需要同步线程
+    // b, h, 0 , i, j
+    int base = (bb * H + hh) * (T / _CHUNK_LEN_) * C * C + i;
+#pragma unroll
+    for (int j = 0; j < C; j++)
+    {
+        state[j] = s_[base + j * C];
+    }
     for (int t = 0; t < T; t++) {
         int ind = bb*T*H*C + t*H*C + hh * C + i;
         __syncthreads();
