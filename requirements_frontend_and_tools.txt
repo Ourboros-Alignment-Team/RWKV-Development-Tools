@@ -1,0 +1,10 @@
+gradio==5.4.0
+matplotlib==3.9.2
+rwkv
+torch
+torchvision
+torchaudio
+openai==0.28.0
+opencc==1.1.9
+pyarrow==19.0.1
+bottle==0.13.2
