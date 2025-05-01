@@ -20,6 +20,18 @@
 
 ✅  提供多智能体框架，支持在线学习。
 
+✅  支持 RWKV V7
+
+✅  GRPO强化学习的支持
+
+✅  一个多智能体的框架， Ourborous，以及它的前端界面。
+
+✅  翻新后端服务，并支持批量推理。
+
+
+---
+## TODO
+
 ⏳ 端到端多模态训练与推理。
 
 ## 使用方法
@@ -66,19 +78,12 @@ python playground_webui.py
 ```
 建议使用http://127.0.0.1:7860/?__theme=dark 而不是 http://127.0.0.1:7860/ 启动webui。
 
----
-## TODO
-
-✅  支持 RWKV V7
-✅  GRPO强化学习的支持
-✅  一个多智能体的框架， Ourborous，以及它的前端界面。
-✅  翻新后端服务，并支持批量推理。
-- MMLU和HumanEval数据的一键下载。
 
 
 ## 快速开始
 
 - 前往huggingface下载最新的[rwkv模型](https://huggingface.co/BlinkDL/rwkv-6-world)，
+或者使用本项目提供的示例微调模型[rwkv-ruri-3b](https://huggingface.co/ssg-qwq/rwkv-ruri-3b)。
 - 聊天
     - 将模型文件下载至某目录下，并将`.configs/config2_0.json`中的`ckpt_dir`改为该目录。
     - 将`.configs/config2_0.json`中`infer_service_config`字段的`load_model`改为模型路径。
