@@ -37,9 +37,9 @@ class RWKVStates:
             tmix_wkv_states_list.append(self.tmix_wkv_states)
             cmix_shift_states_list.append(self.cmix_shift_states)
         return RWKVStates(
-            tmix_shift_states=torch.cat(tmix_shift_states_list, dim=2),
+            tmix_shift_states=torch.cat(tmix_shift_states_list, dim=1),
             tmix_wkv_states=torch.cat(tmix_wkv_states_list, dim=1),
-            cmix_shift_states=torch.cat(cmix_shift_states_list, dim=2),
+            cmix_shift_states=torch.cat(cmix_shift_states_list, dim=1),
         )
 
     @staticmethod
