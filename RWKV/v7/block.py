@@ -20,17 +20,24 @@ class Block(nn.Module):
         self.att = RWKV_Tmix_x070(args, layer_id)
         self.ffn = RWKV_CMix_x070(args, layer_id)
 
-    def forward(self, x, v_first, layer_state: LayerRWKVStates, attention_mask=None):
+    def forward(self, x, v_first, layer_state: LayerRWKVStates, attention_mask=None,single_chunk=False):
         if self.layer_id == 0:
             x = self.ln0(x)
 
-        
-        x_attn, v_first, layer_state = self.att(
-            self.ln1(x),
-            v_first,
-            layer_state,
-            attention_mask=attention_mask,
-        )
+        if single_chunk:
+            x_attn, v_first, layer_state = self.att.forward_single_chunk(
+                self.ln1(x),
+                v_first,
+                layer_state,
+                attention_mask=attention_mask,
+            )
+        else:
+            x_attn, v_first, layer_state = self.att(
+                self.ln1(x),
+                v_first,
+                layer_state,
+                attention_mask=attention_mask,
+            )
         x = x + x_attn
 
         ffn_out, layer_state = self.ffn(

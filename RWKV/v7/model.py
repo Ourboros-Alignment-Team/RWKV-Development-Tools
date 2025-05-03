@@ -13,6 +13,7 @@ import types
 import gc
 from typing import Union, Optional, List
 
+
 class RWKV(nn.Module):
     def __init__(self, args_in, voice_on=False):
         print("Warning: State is unstable in RWKV7 training now.")
@@ -273,6 +274,85 @@ class RWKV(nn.Module):
         return out_latent, logits, new_states
 
     def forward(
+        self,
+        idx: Union[torch.Tensor, list],
+        states: RWKVStates = None,
+        overwrite_states: bool = False,
+        latent_output=False,
+        attention_mask=None,
+    ):
+        if self.training:
+            return self.forward_train(
+                idx, states, overwrite_states, latent_output, attention_mask
+            )
+        else:
+            return self.forward_single_chunk(
+                idx, states, overwrite_states, latent_output, attention_mask
+            )
+
+    @torch.no_grad()
+    def forward_single_chunk(
+        self,
+        idx: Union[torch.Tensor, list],
+        states: RWKVStates = None,
+        overwrite_states: bool = False,
+        latent_output=False,
+        attention_mask=None,
+    ):
+        args = self.args
+        idx = torch.tensor(idx, device=next(self.parameters()).device, dtype=torch.long)
+        B, T = idx.size()
+        # assert T <= args.chunk_ctx, "Cannot forward, model ctx_len is exhausted."
+        C = args.n_embd
+        H = args.dim_att // args.head_size
+        assert C == H * args.head_size
+
+        if states is None:
+            states = RWKVStates.create(
+                args.n_layer,
+                B,
+                C,
+                args.n_head,
+                args.head_size,
+                idx.device,
+                self.emb.weight.dtype,
+            )
+        states = states.to(next(self.parameters()).device)
+        new_states = (
+            RWKVStates.create(
+                args.n_layer,
+                B,
+                C,
+                args.n_head,
+                args.head_size,
+                idx.device,
+                self.emb.weight.dtype,
+            )
+            if not overwrite_states
+            else states
+        )
+
+        x = self.emb(idx)
+        v_first = torch.zeros_like(x)
+
+        for i in range(len(self.blocks)):
+            block = self.blocks[i]
+            state = states[i]
+            x, v_first, state = block(
+                x, v_first, state, attention_mask, single_chunk=True
+            )
+            new_states[i] = state
+
+        if latent_output:
+            latent = x
+        x = self.ln_out(x)
+        logits = self.head(x)
+
+        if latent_output:
+            return logits, new_states, latent
+        return logits, new_states
+
+    def forward_train(
         self,
         idx: Union[torch.Tensor, list],
         states: RWKVStates = None,

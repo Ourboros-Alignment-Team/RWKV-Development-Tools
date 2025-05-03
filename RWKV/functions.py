@@ -481,6 +481,7 @@ def calc_cross_entropy_loss(logits, targets, mask, reshape_mode=False):
     else:
         mask = mask.view(-1)
     sum_mask = torch.sum(mask).item()
+    
 
     if sum_mask == mask.shape[0]:
         loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))

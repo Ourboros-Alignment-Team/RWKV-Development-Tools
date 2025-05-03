@@ -26,4 +26,4 @@ phoenix
 configs/configv7v.json
 ./RWKV/v7/infer_model/cuda_why_doesnt_work
 **/__pycache__
-
+RWKV_backup

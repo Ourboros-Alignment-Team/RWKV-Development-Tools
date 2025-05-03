@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 
 from .rwkvLinear import make_linear_att
-from RWKV.v7.rwkvop_state import RUN_CUDA_RWKV7g
+from RWKV.v7.rwkvop_state import RUN_CUDA_RWKV7g,RUN_CUDA_RWKV7s
 from torch.nn import functional as F
 
 
@@ -130,6 +130,7 @@ class RWKV_Tmix_x070(nn.Module):
         # xx = self.time_shift(x) - x
         shift_state = layer_state.tmix_shift_states
         wkv_state = layer_state.tmix_wkv_states.clone().contiguous()
+
         xx = torch.concat((shift_state.unsqueeze(1), x[:, :-1]), dim=1) - x
 
         xr, xw, xk, xv, xa, xg = self.addcmul_kernel(x, xx)
@@ -172,3 +173,61 @@ class RWKV_Tmix_x070(nn.Module):
         layer_state.tmix_shift_states = shift_state
         layer_state.tmix_wkv_states = wkv_state
         return x, v_first, layer_state
+
+    # @torch.compile
+    def forward_single_chunk(self, x, v_first, layer_state, attention_mask=None):
+        B, T, C = x.size()
+        H = self.n_head
+
+        if attention_mask is not None:
+            x = x.mul(attention_mask[:, -x.shape[-2] :, None])
+
+        # xx = self.time_shift(x) - x
+        shift_state = layer_state.tmix_shift_states
+        wkv_state = layer_state.tmix_wkv_states.clone().contiguous()
+
+        xx = torch.concat((shift_state.unsqueeze(1), x[:, :-1]), dim=1) - x
+
+        xr, xw, xk, xv, xa, xg = self.addcmul_kernel(x, xx)
+        shift_state = x[:, -1, :]
+
+        r = self.receptance(xr)
+        w = (
+            -F.softplus(-(self.w0 + torch.tanh(xw @ self.w1) @ self.w2)) - 0.5
+        )  # soft-clamp to (-inf, -0.5)
+        k = self.key(xk)
+        v = self.value(xv)
+        if self.layer_id == 0:
+            v_first = v  # store the v of the first layer
+        else:
+            v = v + (v_first - v) * torch.sigmoid(
+                self.v0 + (xv @ self.v1) @ self.v2
+            )  # add value residual
+        a = torch.sigmoid(
+            self.a0 + (xa @ self.a1) @ self.a2
+        )  # a is "in-context learning rate"
+        g = torch.sigmoid(xg @ self.g1) @ self.g2
+
+        kk = k * self.k_k
+        kk = F.normalize(kk.view(B, T, H, -1), dim=-1, p=2.0).view(B, T, C)
+        k = k * (1 + (a - 1) * self.k_a)
+
+        if attention_mask is not None:
+            v = v * attention_mask[:, -v.shape[-2] :, None]
+
+        x, wkv_state = RUN_CUDA_RWKV7s(r, w, k, v, -kk, kk * a, wkv_state)
+        x = self.ln_x(x.view(B * T, C)).view(B, T, C)
+
+        x = x + (
+            (r.view(B, T, H, -1) * k.view(B, T, H, -1) * self.r_k).sum(
+                dim=-1, keepdim=True
+            )
+            * v.view(B, T, H, -1)
+        ).view(B, T, C)
+        x = self.output(x * g)
+        layer_state.tmix_shift_states = shift_state
+        layer_state.tmix_wkv_states = wkv_state
+        return x, v_first, layer_state
+
+
+
