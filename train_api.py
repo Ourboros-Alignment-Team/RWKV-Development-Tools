@@ -258,6 +258,7 @@ def train_gsm8k():
     kl_weight = req.get("kl_weight", grpo_config.kl_weight)
     grad_cp_max_norm = req.get("grad_cp_max_norm", grpo_config.grad_cp_max_norm)
     accumulate_grad = req.get("accumulate_grad", grpo_config.accumulate_grad)
+    chunk_len = req.get("chunk_len", train_config.model.chunk_len)
     response.content_type = "application/json"
     return app.train_grpo(
         rl_dataset=rl_dataset,
@@ -289,6 +290,7 @@ def train_gsm8k():
         kl_weight=kl_weight,
         grad_cp_max_norm=grad_cp_max_norm,
         accumulate_grad=accumulate_grad,
+        chunk_len=chunk_len
     )
 
 

@@ -3,7 +3,7 @@ import os
 
 infer_config = global_config.infer_service_config
 from utils.message_manager import Conversation, cList
-from utils.collections import parse_format_constrain_str
+from utils.functions import parse_format_constrain_str
 from config import RWKVInfer as RWKV
 from typing import List
 from RWKV.functions import sample_logits, ppl, batch_block_infer, batch_chat

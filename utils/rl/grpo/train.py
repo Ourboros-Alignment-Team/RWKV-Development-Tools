@@ -13,6 +13,7 @@ from utils.rl.grpo.functions import (
     group_advantages,
     get_batch_log_probs,
 )
+from utils.functions import pad_zeros_to_chunk
 
 from typing import List
 from utils.rl.grpo.replay import ReplaySlidingWindow, ExperienceHist
@@ -165,7 +166,7 @@ class GRPOTrainer:
         )
         return log_probs
 
-    def request_state_idx(self,load_dir=None):
+    def request_state_idx(self, load_dir=None):
         resp = requests.post(
             self.ref_model_server + "/regist_state_id",
             json={"load_dir": load_dir},
@@ -207,6 +208,7 @@ class GRPOTrainer:
         tiny_batch_size: int = 1,
         train_batch_size: int = 1,
         begin_with_state_batch: List[RWKVStates] = None,
+        chunk_len: int = 1,
         **kwargs,
     ):
 
@@ -257,6 +259,15 @@ class GRPOTrainer:
                     t_full_seq_batch, reward_batch, action_mask_batch, speak_text_batch
                 )
             )
+
+            if chunk_len > 1:
+                t_full_seq_batch = pad_zeros_to_chunk(t_full_seq_batch, chunk_len)
+                action_mask_batch = pad_zeros_to_chunk(
+                    action_mask_batch, chunk_len, count_fix=1
+                )
+
+            t_full_seq_batch = pad_zeros_to_chunk(t_full_seq_batch, chunk_len)
+            action_mask_batch = pad_zeros_to_chunk(action_mask_batch, chunk_len)
 
             reward_list.append(reward_batch)
             advantages_batch = group_advantages(reward_batch)

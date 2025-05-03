@@ -4,7 +4,7 @@ infer_config = global_config.infer_service_config
 
 from RWKV.functions import sample_logits, ppl, batch_block_infer
 import torch
-from utils.collections import parse_format_constrain_str
+from utils.functions import parse_format_constrain_str
 import threading
 from collections import OrderedDict
 from typing import List, Tuple

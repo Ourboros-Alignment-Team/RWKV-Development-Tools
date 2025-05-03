@@ -37,7 +37,7 @@ import wandb
 import sys
 import psutil
 
-from utils.collections import pad_2d_list_with_zeros, pad_and_batch
+from utils.functions import pad_and_batch
 from utils.dataset.dataset import (
     MultimodalDataset,
     read_bin_wav,
