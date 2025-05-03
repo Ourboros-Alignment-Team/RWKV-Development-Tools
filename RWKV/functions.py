@@ -139,7 +139,7 @@ def speak_next_token(
             [last_token],
         ],
         dtype=torch.long,
-    ).to(rwkv.args.device)
+    ).to(rwkv.device)
 
     logits, states = rwkv(
         idx, states, allow_torch_checkpoint=False, overwrite_states=True
@@ -190,8 +190,8 @@ def speak(
                 args.n_embd,
                 args.n_head,
                 args.head_size,
-                rwkv.args.device,
-                rwkv.args.dtype,
+                rwkv.device,
+                rwkv.dtype,
             )
         else:
             new_states = states
@@ -224,7 +224,7 @@ def speak(
             if next_token in token_stop:
                 if m_postfix_token:
                     postfix = torch.tensor([[m_postfix_token]], dtype=torch.long).to(
-                        rwkv.args.device
+                        rwkv.device
                     )
                     logits, new_states = rwkv(postfix, new_states)
                 speak_sequence.pop()
@@ -295,8 +295,8 @@ def batch_generate(
             args.n_embd,
             args.n_head,
             args.head_size,
-            rwkv.args.device,
-            rwkv.args.dtype,
+            rwkv.device,
+            rwkv.dtype,
         )
     else:
         new_states = states
@@ -310,8 +310,8 @@ def batch_generate(
         args.n_embd,
         args.n_head,
         args.head_size,
-        rwkv.args.device,
-        rwkv.args.dtype,
+        rwkv.device,
+        rwkv.dtype,
     )
     for i in range(max_tokens):
         next_tokens_batch, new_states = speak_next_token_batch(
@@ -342,7 +342,7 @@ def batch_generate(
                     target_state = states.batchof(b)
                     if m_postfix_token:
                         postfix = torch.tensor([m_postfix_token], dtype=torch.long).to(
-                            rwkv.args.device
+                            rwkv.device
                         )
                         _, target_state = rwkv(postfix, target_state)
                     out_states.tmix_shift_states[:, b, :] = copy.deepcopy(
@@ -419,8 +419,8 @@ def batch_chat(
                 rwkv.args.n_embd,
                 rwkv.args.n_head,
                 rwkv.args.head_size,
-                rwkv.args.device,
-                rwkv.args.dtype,
+                rwkv.device,
+                rwkv.dtype,
             )
             for _ in range(B)
         ]
@@ -452,7 +452,7 @@ def batch_chat(
     start_with_batch_tokens = torch.tensor(
         [x[-1:] for x in start_with_tokens_batch],
         dtype=torch.long,
-        device=rwkv.args.device,
+        device=rwkv.device,
     )
 
     # 开始推理

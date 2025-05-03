@@ -114,15 +114,17 @@ class RWKV(torch.jit.ScriptModule):
         args = self.configs.model
         self.args = args
         model_weights = torch.load(args.load_model, map_location=args.device)
+        self.device = args.device
         model_keys = list(model_weights.keys())
 
         if self.args.dtype == "fp32":
-            self.args.dtype = torch.float
+            self.dtype = torch.float
         elif self.args.dtype == "fp16":
-            self.args.dtype = torch.half
+            self.dtype = torch.half
         elif self.args.dtype == "bf16":
-            self.args.dtype = torch.bfloat16
-
+            self.dtype = torch.bfloat16
+        else:
+            raise ValueError("dtype must be fp32, fp16 or bf16")
         args.vocab_size, args.n_embd = model_weights["emb.weight"].shape
         # if args.n_embd < 0:
         #     args.n_embd = model_weights["head.weight"].shape[1]
@@ -148,7 +150,7 @@ class RWKV(torch.jit.ScriptModule):
                 or "head.weight" in k
             ):
                 model_weights[k] = model_weights[k].t()
-            model_weights[k] = model_weights[k].squeeze().to(dtype=args.dtype)
+            model_weights[k] = model_weights[k].squeeze().to(dtype=self.dtype)
             if k.endswith("att.r_k"):
                 model_weights[k] = model_weights[k].flatten()
         print("n_layer:", args.n_layer)
@@ -179,8 +181,8 @@ class RWKV(torch.jit.ScriptModule):
             args.n_embd,
             args.n_head,
             args.head_size,
-            args.device,
-            args.dtype,
+            self.device,
+            self.dtype,
         )
         self.state_lock = threading.Lock()
 
@@ -194,7 +196,7 @@ class RWKV(torch.jit.ScriptModule):
         latent_output: bool = False,
     ):
         args = self.args
-        idx = torch.tensor(tokens_batches, dtype=torch.long).to(args.device)
+        idx = torch.tensor(tokens_batches, dtype=torch.long).to(self.device)
 
         B, _ = idx.size()
         C = args.n_embd
@@ -305,7 +307,7 @@ class RWKV(torch.jit.ScriptModule):
     @torch.no_grad()
     def load_weights(self, load_dir):
         print(f"load weights from {load_dir}...")
-        model_weights = torch.load(load_dir, map_location=self.args.device)
+        model_weights = torch.load(load_dir, map_location=self.device)
         model_keys = list(model_weights.keys())
         args = self.args
 
@@ -328,7 +330,7 @@ class RWKV(torch.jit.ScriptModule):
                 or "head.weight" in k
             ):
                 model_weights[k] = model_weights[k].t()
-            model_weights[k] = model_weights[k].squeeze().to(dtype=args.dtype)
+            model_weights[k] = model_weights[k].squeeze().to(dtype=self.dtype)
             if k.endswith("att.r_k"):
                 model_weights[k] = model_weights[k].flatten()
         print("n_layer:", args.n_layer)
@@ -371,7 +373,7 @@ class RWKV(torch.jit.ScriptModule):
     @torch.jit.script_method
     def forward_from_embeddings(self, embeddings, states):
         args = self.args
-        embeddings = embeddings.to(args.device, args.dtype)
+        embeddings = embeddings.to(self.device, self.dtype)
         B, _, _ = embeddings.size()
         C = args.n_embd
         new_states = RWKVStates.create(
@@ -380,8 +382,8 @@ class RWKV(torch.jit.ScriptModule):
             C,
             args.n_head,
             args.head_size,
-            args.device,
-            args.dtype,
+            self.device,
+            self.dtype,
         )
         if states is None:
             states = RWKVStates.create(
@@ -390,8 +392,8 @@ class RWKV(torch.jit.ScriptModule):
                 C,
                 args.n_head,
                 args.head_size,
-                args.device,
-                args.dtype,
+                self.device,
+                self.dtype,
             )
         res = self.forward_seq_from_embeddings(
             embeddings,
@@ -419,8 +421,8 @@ class RWKV(torch.jit.ScriptModule):
                 self.args.n_embd,
                 self.args.n_head,
                 self.args.head_size,
-                self.args.device,
-                self.args.dtype,
+                self.device,
+                self.dtype,
             )
             a = self.empty_state_queue + supp_states
             self.empty_state_queue = self.empty_state_queue + supp_states

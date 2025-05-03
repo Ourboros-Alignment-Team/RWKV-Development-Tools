@@ -99,11 +99,11 @@ def infer_batch_service():
         for state_idx in state_idx_list:
             if state is None:
                 state = infer_app.states_pool.get(
-                    state_idx, device=infer_app.model.args.device
+                    state_idx, device=infer_app.model.device
                 )
             else:
                 state += infer_app.states_pool.get(
-                    state_idx, device=infer_app.model.args.device
+                    state_idx, device=infer_app.model.device
                 )
     # 调用 infer 函数进行推理
     out, states, latent_out = infer_app.infer_batch(
@@ -125,7 +125,7 @@ def infer_service():
     save_to_now_state_idx = req.get("save_to_now_state_idx", None)  # 可选的 state_idx
     state = (
         infer_app.states_pool.get(
-            state_idx, device=infer_app.model.args.device
+            state_idx, device=infer_app.model.device
         )
         if state_idx
         else None
@@ -155,7 +155,7 @@ def infer_tokens_service():
     save_to_now_state_idx = req.get("save_to_now_state_idx", None)  # 可选的 state_idx
     state = (
         infer_app.states_pool.get(
-            state_idx, device=infer_app.model.args.device
+            state_idx, device=infer_app.model.device
         )
         if state_idx
         else None

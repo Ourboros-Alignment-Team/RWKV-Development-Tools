@@ -33,11 +33,11 @@ class RWKV(nn.Module):
             args.vocoder = args_in.vocoder
         self.args = args
         if self.args.model.dtype == "fp32":
-            self.args.model.dtype = torch.float
+            self.dtype = torch.float
         elif self.args.model.dtype == "fp16":
-            self.args.model.dtype = torch.half
+            self.dtype = torch.half
         elif self.args.model.dtype == "bf16":
-            self.args.model.dtype = torch.bfloat16
+            self.dtype = torch.bfloat16
         # load weight
         if args.load_model is not None:
             model_weights = torch.load(args.load_model, map_location="cpu")
@@ -101,10 +101,14 @@ class RWKV(nn.Module):
                 self.vocoder_d.load_state_dict(ckpt["d"])
 
         for p in self.parameters():
-            p.data = p.data.to(dtype=self.args.model.dtype)
+            p.data = p.data.to(dtype=self.dtype)
 
         gc.collect()
         torch.cuda.empty_cache()
+        
+    @property
+    def device(self):
+        return next(self.parameters()).device
 
     def save_vocoder(self, to_dir):
         d = {"e": self.adapter_e.state_dict(), "d": self.vocoder_d.state_dict()}
@@ -310,7 +314,7 @@ class RWKV(nn.Module):
     ):
         args = self.args
         # idx [B,N]
-        idx = torch.tensor(idx, device=next(self.parameters()).device, dtype=torch.long)
+        idx = torch.tensor(idx, device=self.device, dtype=torch.long)
 
         B, T = idx.size()
         C = args.n_embd
@@ -328,7 +332,7 @@ class RWKV(nn.Module):
                 idx.device,
                 self.emb.weight.dtype,
             )
-        states = states.to(next(self.parameters()).device)
+        states = states.to(self.device)
         new_states = (
             RWKVStates.create(
                 args.n_layer,
@@ -385,7 +389,7 @@ class RWKV(nn.Module):
 
     def embedding(self, idx):
         args = self.args
-        idx = idx.to(next(self.parameters()).device, dtype=torch.long)
+        idx = idx.to(self.device, dtype=torch.long)
 
         B, T = idx.size()
         C = args.n_embd
@@ -395,7 +399,7 @@ class RWKV(nn.Module):
         return x
 
     def to_logits(self, x):
-        x = x.to(next(self.parameters()).device, dtype=next(self.parameters()).dtype)
+        x = x.to(self.device, dtype=self.dtype)
         x = self.ln_out(x)
         logits = self.head(x)
         return logits

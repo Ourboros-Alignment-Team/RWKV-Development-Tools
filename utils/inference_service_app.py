@@ -460,8 +460,8 @@ class InferenceAPP:
                 self.model.args.n_embd,
                 self.model.args.n_head,
                 self.model.args.head_size,
-                self.model.args.device,
-                self.model.args.dtype,
+                self.model.device,
+                self.model.dtype,
             )
         else:
             assert len(use_now_state_idx_batch) == B

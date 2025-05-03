@@ -18,11 +18,11 @@ class RWKV(nn.Module):
         args = types.SimpleNamespace(**vars(args_in.model))
         self.args = args
         if self.args.dtype == "fp32":
-            self.args.dtype = torch.float
+            self.dtype = torch.float
         elif self.args.dtype == "fp16":
-            self.args.dtype = torch.half
+            self.dtype = torch.half
         elif self.args.dtype == "bf16":
-            self.args.dtype = torch.bfloat16
+            self.dtype = torch.bfloat16
         self.args.train = types.SimpleNamespace()
         self.args.train.dropout = 0
         args.dropout = 0
@@ -69,11 +69,15 @@ class RWKV(nn.Module):
                 bias=self.blocks[0].ln0.bias,
             ))
 
-        self.to(device=self.args.device, dtype=self.args.dtype)
+        self.to(device=self.args.device, dtype=self.dtype)
 
         gc.collect()
         torch.cuda.empty_cache()
 
+    @property
+    def device(self):
+        return next(self.parameters()).device
+    
     @torch.no_grad()
     def infer(self, idx, states=None, overwrite_states=False):
         args = self.args
@@ -253,7 +257,7 @@ class RWKV(nn.Module):
     def load_weights(self, load_dir):
         model_weights = torch.load(load_dir, map_location="cpu")
         self.load_state_dict(model_weights, strict=False)
-        self.to(device=self.args.device, dtype=self.args.dtype)
+        self.to(device=self.device, dtype=self.dtype)
 
     @torch.no_grad()
     def to_logits(self, x):

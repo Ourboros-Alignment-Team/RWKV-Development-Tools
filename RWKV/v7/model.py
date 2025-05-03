@@ -25,11 +25,13 @@ class RWKV(nn.Module):
 
         self.args = args
         if self.args.model.dtype == "fp32":
-            self.args.model.dtype = torch.float
+            self.dtype = torch.float
         elif self.args.model.dtype == "fp16":
-            self.args.model.dtype = torch.half
+            self.dtype = torch.half
         elif self.args.model.dtype == "bf16":
-            self.args.model.dtype = torch.bfloat16
+            self.dtype = torch.bfloat16
+        else:
+            raise ValueError("dtype must be fp32, fp16, or bf16")
         if args.load_model is not None:
             model_weights = torch.load(args.load_model, map_location="cpu")
         else:
@@ -64,10 +66,14 @@ class RWKV(nn.Module):
 
         self.adapter_e = None
         for p in self.parameters():
-            p.data = p.data.to(dtype=self.args.model.dtype)
+            p.data = p.data.to(dtype=self.dtype)
 
         gc.collect()
         torch.cuda.empty_cache()
+
+    @property
+    def device(self):
+        return next(self.parameters()).device
 
     def get_optim_groups(self):
         args = self.args
