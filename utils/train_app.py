@@ -26,9 +26,6 @@ from RWKV.functions import (
 from utils.rl.grpo.functions import (
     zero_pad_sequences,
 )
-# from RWKV.multimodal_functions import (
-#     voice_encode_and_adapt,
-# )
 from torch.utils.data import Dataset, DataLoader
 import deepspeed
 from deepspeed.ops.adam import DeepSpeedCPUAdam, FusedAdam
@@ -37,7 +34,7 @@ import wandb
 import sys
 import psutil
 
-from utils.functions import pad_and_batch
+from utils.functions import pad_and_batch, pad_zeros_to_chunk
 from utils.dataset.dataset import (
     MultimodalDataset,
     read_bin_wav,
@@ -387,7 +384,6 @@ class OnlineTrainingAPP:
             else:
                 yield mean_loss, output
 
-
     def train_from_folder(
         self,
         forder_dir: str,
@@ -572,18 +568,18 @@ class OnlineTrainingAPP:
                 total_text_loss = total_text_loss[-100:]
                 mean_text_loss = sum(total_text_loss) / len(total_text_loss)
 
-                yield json.dumps(
-                    {
-                        "epoch": e,
-                        "step": step,
-                        "mean_text_loss": mean_text_loss,
-                        "text_loss": text_loss_item,
-                        "n_tokens": dataloader.n_dataset_ctx,
-                        "left_tokens": dataloader.n_dataset_ctx
-                        - dataloader.current_ctx,
-                    },
-                    ensure_ascii=False,
-                ) + "\n"
+                # yield json.dumps(
+                #     {
+                #         "epoch": e,
+                #         "step": step,
+                #         "mean_text_loss": mean_text_loss,
+                #         "text_loss": text_loss_item,
+                #         "n_tokens": dataloader.n_dataset_ctx,
+                #         "left_tokens": dataloader.n_dataset_ctx
+                #         - dataloader.current_ctx,
+                #     },
+                #     ensure_ascii=False,
+                # ) + "\n"
                 print(
                     f"gpu{self.rank}: mean-text-loss->{mean_text_loss} | now-text-loss->{text_loss_item}"
                 )
@@ -602,21 +598,21 @@ class OnlineTrainingAPP:
                 svpath = self.save_weight(
                     f"train_single_folder_epoch={e}", save_train_state=True
                 )
-                yield json.dumps(
-                    {
-                        "over": False,
-                        "to_dir": svpath,
-                    },
-                    ensure_ascii=False,
-                ) + "\n"
-                print(f"====save at epoch={e}====")
-        yield json.dumps(
-            {
-                "over": True,
-                "to_dir": svpath,
-            },
-            ensure_ascii=False,
-        ) + "\n"
+        #         yield json.dumps(
+        #             {
+        #                 "over": False,
+        #                 "to_dir": svpath,
+        #             },
+        #             ensure_ascii=False,
+        #         ) + "\n"
+        #         print(f"====save at epoch={e}====")
+        # yield json.dumps(
+        #     {
+        #         "over": True,
+        #         "to_dir": svpath,
+        #     },
+        #     ensure_ascii=False,
+        # ) + "\n"
 
     def train_from_folders(
         self,
@@ -947,6 +943,7 @@ class OnlineTrainingAPP:
         kl_weight: float = 0.01,
         grad_cp_max_norm: float = 1.0,
         accumulate_grad: bool = True,
+        chunk_len: int = 1,
     ):
         grpo_trainer = GRPOTrainer(
             self.model_engine, ref_model_server, tokenizer=self.train_tokenizer
@@ -993,6 +990,7 @@ class OnlineTrainingAPP:
                     num_rollouts=num_rollouts,
                     tiny_batch_size=tiny_batch_size,
                     train_batch_size=train_batch_size,
+                    chunk_len=chunk_len,
                     **kwargs_batch,
                 )
                 self.model_engine.train()
@@ -1095,50 +1093,50 @@ class OnlineTrainingAPP:
                             self.model_engine.step()
                             exp = exp.to("cpu")
                         clear_gpu_memory(force=True)
-                        # yield (
-                        #     json.dumps(
-                        #         {
-                        #             "epoch": epoch,
-                        #             "step": step,
-                        #             "loss": loss.item(),
-                        #             "kl": kl.item(),
-                        #             "sum_rewards": episode_reward_sum.item(),
-                        #             "grad_norm": grad_norm.item(),
-                        #         },
-                        #         ensure_ascii=False,
-                        #     )
-                        #     + "\n"
-                        # )
+                        yield (
+                            json.dumps(
+                                {
+                                    "epoch": epoch,
+                                    "step": step,
+                                    "loss": loss.item(),
+                                    "kl": kl.item(),
+                                    "sum_rewards": episode_reward_sum.item(),
+                                    "grad_norm": grad_norm.item(),
+                                },
+                                ensure_ascii=False,
+                            )
+                            + "\n"
+                        )
 
                 if episode % n_save_episode_ckpt == 0 and self.rank == 0:
                     svpath = self.save_weight(
                         f"train_grpo_episode={episode}", save_train_state=True
                     )
-                    # yield (
-                    #     json.dumps(
-                    #         {
-                    #             "over": False,
-                    #             "to_dir": svpath,
-                    #         },
-                    #         ensure_ascii=False,
-                    #     )
-                    #     + "\n"
-                    # )
+                    yield (
+                        json.dumps(
+                            {
+                                "over": False,
+                                "to_dir": svpath,
+                            },
+                            ensure_ascii=False,
+                        )
+                        + "\n"
+                    )
 
             if epoch % n_save_ckpt == 0 and self.rank == 0:
                 svpath = self.save_weight(
                     f"train_grpo_epoch={epoch}", save_train_state=True
                 )
-                # yield (
-                #     json.dumps(
-                #         {
-                #             "over": False,
-                #             "to_dir": svpath,
-                #         },
-                #         ensure_ascii=False,
-                #     )
-                #     + "\n"
-                # )
+                yield (
+                    json.dumps(
+                        {
+                            "over": False,
+                            "to_dir": svpath,
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
 
     def train_grpo_from_group_dataset(
         self,
@@ -1157,6 +1155,7 @@ class OnlineTrainingAPP:
         grad_cp_max_norm: float = 1.0,
         accumulate_grad: bool = True,
         continuous_history: bool = False,
+        chunk_len: int = 1,
     ):
         self.model_engine.train()
         grpo_trainer = GRPOTrainer(
@@ -1224,6 +1223,13 @@ class OnlineTrainingAPP:
 
                         turn_units = zero_pad_sequences(turn_units)
                         turn_masks = zero_pad_sequences(turn_masks)
+
+                        if chunk_len > 1:
+                            turn_units = pad_zeros_to_chunk(turn_units, chunk_len)
+                            turn_masks = pad_zeros_to_chunk(
+                                turn_masks, chunk_len
+                            )
+
                         turn_rewards = torch.tensor(
                             turn_rewards, device="cpu", dtype=torch.float
                         ).unsqueeze(1)
@@ -1434,6 +1440,7 @@ class OnlineTrainingAPP:
         save_weight_folder=None,
         save_weight_name="train_grpo_online",
         begin_with_state_dir=None,
+        chunk_len: int = 1,
     ):
         os.makedirs(save_weight_folder, exist_ok=True)
         self.model_engine.train()
@@ -1520,6 +1527,17 @@ class OnlineTrainingAPP:
 
                 turn_units = zero_pad_sequences(turn_units)
                 turn_masks = zero_pad_sequences(turn_masks)
+                
+                
+                print("before pad:", turn_units.shape, turn_masks.shape,"<<")
+                if chunk_len > 1:
+                    turn_units = pad_zeros_to_chunk(turn_units, chunk_len)
+                    turn_masks = pad_zeros_to_chunk(
+                        turn_masks, chunk_len
+                    )
+                    print("after pad:", turn_units.shape, turn_masks.shape,">>")
+
+                
                 turn_rewards = torch.tensor(
                     turn_rewards, device="cpu", dtype=torch.float
                 ).unsqueeze(1)
@@ -1683,33 +1701,33 @@ class OnlineTrainingAPP:
                     exp = exp.to("cpu")
                     del exp
                 clear_gpu_memory(force=True)
-                yield (
-                    json.dumps(
-                        {
-                            "step": step,
-                            "loss": loss.item(),
-                            "kl": kl.item(),
-                            "sum_rewards": episode_reward_sum.item(),
-                            "grad_norm": grad_norm.item(),
-                        },
-                        ensure_ascii=False,
-                    )
-                    + "\n"
-                )
+                # yield (
+                #     json.dumps(
+                #         {
+                #             "step": step,
+                #             "loss": loss.item(),
+                #             "kl": kl.item(),
+                #             "sum_rewards": episode_reward_sum.item(),
+                #             "grad_norm": grad_norm.item(),
+                #         },
+                #         ensure_ascii=False,
+                #     )
+                #     + "\n"
+                # )
         svpath = self.save_weight(
             save_weight_name, save_train_state=True, folder=save_weight_folder
         )
         self.train_state = None
-        yield (
-            json.dumps(
-                {
-                    "over": True,
-                    "to_dir": svpath,
-                },
-                ensure_ascii=False,
-            )
-            + "\n"
-        )
+        # yield (
+        #     json.dumps(
+        #         {
+        #             "over": True,
+        #             "to_dir": svpath,
+        #         },
+        #         ensure_ascii=False,
+        #     )
+        #     + "\n"
+        # )
 
     def train_sft_online(
         self,
