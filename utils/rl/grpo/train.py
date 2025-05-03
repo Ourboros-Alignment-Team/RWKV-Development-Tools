@@ -260,14 +260,12 @@ class GRPOTrainer:
                 )
             )
 
+
             if chunk_len > 1:
                 t_full_seq_batch = pad_zeros_to_chunk(t_full_seq_batch, chunk_len)
                 action_mask_batch = pad_zeros_to_chunk(
                     action_mask_batch, chunk_len, count_fix=1
                 )
-
-            t_full_seq_batch = pad_zeros_to_chunk(t_full_seq_batch, chunk_len)
-            action_mask_batch = pad_zeros_to_chunk(action_mask_batch, chunk_len)
 
             reward_list.append(reward_batch)
             advantages_batch = group_advantages(reward_batch)

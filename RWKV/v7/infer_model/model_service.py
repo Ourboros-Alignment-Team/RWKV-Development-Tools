@@ -114,7 +114,7 @@ class RWKV(torch.jit.ScriptModule):
         args = self.configs.model
         self.args = args
         model_weights = torch.load(args.load_model, map_location=args.device)
-        self.device = args.device
+        self.device = torch.device(args.device)
         model_keys = list(model_weights.keys())
 
         if self.args.dtype == "fp32":
