@@ -784,7 +784,7 @@ class OnlineTrainingAPP:
     ):
         logits = logits.to(
             device=next(self.model_engine.parameters()).device,
-            dtype=self.args.model.dtype,
+            dtype=self.model.args.dtype,
         )
         labels = labels.to(
             device=next(self.model_engine.parameters()).device,
@@ -1095,50 +1095,50 @@ class OnlineTrainingAPP:
                             self.model_engine.step()
                             exp = exp.to("cpu")
                         clear_gpu_memory(force=True)
-                        yield (
-                            json.dumps(
-                                {
-                                    "epoch": epoch,
-                                    "step": step,
-                                    "loss": loss.item(),
-                                    "kl": kl.item(),
-                                    "sum_rewards": episode_reward_sum.item(),
-                                    "grad_norm": grad_norm.item(),
-                                },
-                                ensure_ascii=False,
-                            )
-                            + "\n"
-                        )
+                        # yield (
+                        #     json.dumps(
+                        #         {
+                        #             "epoch": epoch,
+                        #             "step": step,
+                        #             "loss": loss.item(),
+                        #             "kl": kl.item(),
+                        #             "sum_rewards": episode_reward_sum.item(),
+                        #             "grad_norm": grad_norm.item(),
+                        #         },
+                        #         ensure_ascii=False,
+                        #     )
+                        #     + "\n"
+                        # )
 
                 if episode % n_save_episode_ckpt == 0 and self.rank == 0:
                     svpath = self.save_weight(
                         f"train_grpo_episode={episode}", save_train_state=True
                     )
-                    yield (
-                        json.dumps(
-                            {
-                                "over": False,
-                                "to_dir": svpath,
-                            },
-                            ensure_ascii=False,
-                        )
-                        + "\n"
-                    )
+                    # yield (
+                    #     json.dumps(
+                    #         {
+                    #             "over": False,
+                    #             "to_dir": svpath,
+                    #         },
+                    #         ensure_ascii=False,
+                    #     )
+                    #     + "\n"
+                    # )
 
             if epoch % n_save_ckpt == 0 and self.rank == 0:
                 svpath = self.save_weight(
                     f"train_grpo_epoch={epoch}", save_train_state=True
                 )
-                yield (
-                    json.dumps(
-                        {
-                            "over": False,
-                            "to_dir": svpath,
-                        },
-                        ensure_ascii=False,
-                    )
-                    + "\n"
-                )
+                # yield (
+                #     json.dumps(
+                #         {
+                #             "over": False,
+                #             "to_dir": svpath,
+                #         },
+                #         ensure_ascii=False,
+                #     )
+                #     + "\n"
+                # )
 
     def train_grpo_from_group_dataset(
         self,

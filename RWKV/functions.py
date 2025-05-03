@@ -191,7 +191,7 @@ def speak(
                 args.n_head,
                 args.head_size,
                 rwkv.device,
-                rwkv.dtype,
+                rwkv.args.dtype,
             )
         else:
             new_states = states
@@ -296,7 +296,7 @@ def batch_generate(
             args.n_head,
             args.head_size,
             rwkv.device,
-            rwkv.dtype,
+            rwkv.args.dtype,
         )
     else:
         new_states = states
@@ -311,7 +311,7 @@ def batch_generate(
         args.n_head,
         args.head_size,
         rwkv.device,
-        rwkv.dtype,
+        rwkv.args.dtype,
     )
     for i in range(max_tokens):
         next_tokens_batch, new_states = speak_next_token_batch(
@@ -420,7 +420,7 @@ def batch_chat(
                 rwkv.args.n_head,
                 rwkv.args.head_size,
                 rwkv.device,
-                rwkv.dtype,
+                rwkv.args.dtype,
             )
             for _ in range(B)
         ]

@@ -33,11 +33,11 @@ class RWKV(nn.Module):
             args.vocoder = args_in.vocoder
         self.args = args
         if self.args.model.dtype == "fp32":
-            self.dtype = torch.float
+            self.args.dtype = torch.float
         elif self.args.model.dtype == "fp16":
-            self.dtype = torch.half
+            self.args.dtype = torch.half
         elif self.args.model.dtype == "bf16":
-            self.dtype = torch.bfloat16
+            self.args.dtype = torch.bfloat16
         # load weight
         if args.load_model is not None:
             model_weights = torch.load(args.load_model, map_location="cpu")
@@ -101,7 +101,7 @@ class RWKV(nn.Module):
                 self.vocoder_d.load_state_dict(ckpt["d"])
 
         for p in self.parameters():
-            p.data = p.data.to(dtype=self.dtype)
+            p.data = p.data.to(dtype=self.args.dtype)
 
         gc.collect()
         torch.cuda.empty_cache()
@@ -399,7 +399,7 @@ class RWKV(nn.Module):
         return x
 
     def to_logits(self, x):
-        x = x.to(self.device, dtype=self.dtype)
+        x = x.to(self.device, dtype=self.args.dtype)
         x = self.ln_out(x)
         logits = self.head(x)
         return logits

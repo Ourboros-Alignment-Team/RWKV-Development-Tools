@@ -118,11 +118,11 @@ class RWKV(torch.jit.ScriptModule):
         model_keys = list(model_weights.keys())
 
         if self.args.dtype == "fp32":
-            self.dtype = torch.float
+            self.args.dtype = torch.float
         elif self.args.dtype == "fp16":
-            self.dtype = torch.half
+            self.args.dtype = torch.half
         elif self.args.dtype == "bf16":
-            self.dtype = torch.bfloat16
+            self.args.dtype = torch.bfloat16
         else:
             raise ValueError("dtype must be fp32, fp16 or bf16")
         args.vocab_size, args.n_embd = model_weights["emb.weight"].shape
@@ -150,7 +150,7 @@ class RWKV(torch.jit.ScriptModule):
                 or "head.weight" in k
             ):
                 model_weights[k] = model_weights[k].t()
-            model_weights[k] = model_weights[k].squeeze().to(dtype=self.dtype)
+            model_weights[k] = model_weights[k].squeeze().to(dtype=self.args.dtype)
             if k.endswith("att.r_k"):
                 model_weights[k] = model_weights[k].flatten()
         print("n_layer:", args.n_layer)
@@ -175,17 +175,6 @@ class RWKV(torch.jit.ScriptModule):
         self.n_embd = args.n_embd
         self.n_layer = args.n_layer
 
-        self.empty_state_queue = RWKVStates.create(
-            args.n_layer,
-            self.configs.batching_batch_size + 1,
-            args.n_embd,
-            args.n_head,
-            args.head_size,
-            self.device,
-            self.dtype,
-        )
-        self.state_lock = threading.Lock()
-
         gc.collect()
         torch.cuda.empty_cache()
 
@@ -200,14 +189,17 @@ class RWKV(torch.jit.ScriptModule):
 
         B, _ = idx.size()
         C = args.n_embd
-        if states is None:
-            with self.state_lock:
-                self.prepare_state()
-                states = self.empty_state_queue.batchof(slice(0, B))
-                self.empty_state_queue.pop(slice(0, B))
 
-        thread = threading.Thread(target=self.prepare_state, daemon=True)
-        thread.start()
+        if states is None:
+            states = RWKVStates.create(
+                args.n_layer,
+                B,
+                C,
+                args.n_head,
+                args.head_size,
+                self.args.device,
+                self.args.dtype,
+            )
 
         # if idx.shape[1] > 1:
         idx = self.embedding(idx)
@@ -330,7 +322,7 @@ class RWKV(torch.jit.ScriptModule):
                 or "head.weight" in k
             ):
                 model_weights[k] = model_weights[k].t()
-            model_weights[k] = model_weights[k].squeeze().to(dtype=self.dtype)
+            model_weights[k] = model_weights[k].squeeze().to(dtype=self.args.dtype)
             if k.endswith("att.r_k"):
                 model_weights[k] = model_weights[k].flatten()
         print("n_layer:", args.n_layer)
@@ -373,7 +365,7 @@ class RWKV(torch.jit.ScriptModule):
     @torch.jit.script_method
     def forward_from_embeddings(self, embeddings, states):
         args = self.args
-        embeddings = embeddings.to(self.device, self.dtype)
+        embeddings = embeddings.to(self.device, self.args.dtype)
         B, _, _ = embeddings.size()
         C = args.n_embd
         new_states = RWKVStates.create(
@@ -383,7 +375,7 @@ class RWKV(torch.jit.ScriptModule):
             args.n_head,
             args.head_size,
             self.device,
-            self.dtype,
+            self.args.dtype,
         )
         if states is None:
             states = RWKVStates.create(
@@ -393,7 +385,7 @@ class RWKV(torch.jit.ScriptModule):
                 args.n_head,
                 args.head_size,
                 self.device,
-                self.dtype,
+                self.args.dtype,
             )
         res = self.forward_seq_from_embeddings(
             embeddings,
@@ -406,24 +398,7 @@ class RWKV(torch.jit.ScriptModule):
     @torch.no_grad()
     def to_logits(self, x):
         z = self.model_weights
-        x = x.to(self.device, dtype=self.dtype)
+        x = x.to(self.device, dtype=self.args.dtype)
         x = x @ z["head.weight"]
 
         return x
-
-    def prepare_state(self):
-        last_n_batch = self.empty_state_queue.get_batch_size()
-        if last_n_batch <= self.configs.batching_batch_size:
-            supplement_n_batch = self.configs.batching_batch_size + 1 - last_n_batch
-            supp_states = RWKVStates.create(
-                self.args.n_layer,
-                supplement_n_batch,
-                self.args.n_embd,
-                self.args.n_head,
-                self.args.head_size,
-                self.device,
-                self.dtype,
-            )
-            a = self.empty_state_queue + supp_states
-            self.empty_state_queue = self.empty_state_queue + supp_states
-        last_n_batch = self.empty_state_queue.get_batch_size()

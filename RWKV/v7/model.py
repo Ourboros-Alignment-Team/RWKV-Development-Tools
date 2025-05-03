@@ -26,11 +26,11 @@ class RWKV(nn.Module):
 
         self.args = args
         if self.args.model.dtype == "fp32":
-            self.dtype = torch.float
+            self.args.dtype = torch.float
         elif self.args.model.dtype == "fp16":
-            self.dtype = torch.half
+            self.args.dtype = torch.half
         elif self.args.model.dtype == "bf16":
-            self.dtype = torch.bfloat16
+            self.args.dtype = torch.bfloat16
         else:
             raise ValueError("dtype must be fp32, fp16, or bf16")
         if args.load_model is not None:
@@ -67,7 +67,7 @@ class RWKV(nn.Module):
 
         self.adapter_e = None
         for p in self.parameters():
-            p.data = p.data.to(dtype=self.dtype)
+            p.data = p.data.to(dtype=self.args.dtype)
 
         gc.collect()
         torch.cuda.empty_cache()
